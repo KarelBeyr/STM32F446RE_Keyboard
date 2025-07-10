@@ -23,6 +23,7 @@
 /* USER CODE BEGIN Includes */
 #include "string.h"
 #include "stdio.h"
+#include "events.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -52,7 +53,7 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_USART2_UART_Init(void);
 /* USER CODE BEGIN PFP */
-
+void handle_event(AppEvent evt);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -103,8 +104,12 @@ int main(void)
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   printf("Before while\r\n");
+  AppEvent evt;
   while (1)
   {
+    if (event_queue_pop(&evt)) {
+      handle_event(evt);
+    }
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -232,11 +237,28 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+void handle_event(AppEvent evt) {
+    switch (evt.type) {
+        case EVENT_KEY_PRESSED:
+        	printf("GOT %c from event\r\n", receivedChar);
+            break;
+
+        case EVENT_TIMER_TICK:
+            // Maybe update screen or timeout handler
+            break;
+
+        default:
+            break;
+    }
+}
+
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
   if (huart->Instance == USART2)
   {
-    printf("GOT %c\r\n", receivedChar);
+    //printf("GOT %c\r\n", receivedChar);
+    AppEvent evt = { .type = EVENT_KEY_PRESSED, .key = receivedChar };
+    event_queue_push(evt);
 
     // Start receiving the next character again
     HAL_UART_Receive_IT(&huart2, &receivedChar, 1);
