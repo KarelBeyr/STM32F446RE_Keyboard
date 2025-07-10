@@ -28,7 +28,23 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+typedef enum {
+    STATE_F1,
+    STATE_F2,
+    STATE_F3,
+} AppState;
 
+typedef struct {
+	AppState currentState;
+
+	// F1 - screen where user enters voltage and can start/stop PWM
+    uint16_t voltage;
+    bool isVoltageEntered;
+    bool isPwmRunning;
+
+    // F2 - screen where user sets three calibration points
+    uint16_t calibration_points[3]; // For mapping
+} AppContext;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -53,7 +69,7 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_USART2_UART_Init(void);
 /* USER CODE BEGIN PFP */
-void handle_event(AppEvent evt);
+void handle_event(AppContext *ctx, AppEvent *evt);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -103,12 +119,18 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  printf("Before while\r\n");
+  printf("Starting the main loop\r\n");
   AppEvent evt;
+  AppContext ctx;
+  ctx.currentState = STATE_F1;
+  ctx.isVoltageEntered = false;
+  ctx.isPwmRunning = false;
+  ctx.voltage = 0;
+
   while (1)
   {
     if (event_queue_pop(&evt)) {
-      handle_event(evt);
+      handle_event(&ctx, &evt);
     }
     /* USER CODE END WHILE */
 
@@ -237,19 +259,111 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-void handle_event(AppEvent evt) {
-    switch (evt.type) {
-        case EVENT_KEY_PRESSED:
-        	printf("GOT %c from event\r\n", receivedChar);
-            break;
+void clearVoltage(AppContext *ctx) {
+  printf("Clearing temporary voltage\r\n");
+  ctx->voltage = 0;
+  ctx->isVoltageEntered = false;
+}
 
-        case EVENT_TIMER_TICK:
-            // Maybe update screen or timeout handler
-            break;
+void stopPWM(AppContext *ctx) {
+  printf("Stopping PWM\r\n");
+  ctx->isPwmRunning = false;
+  // TODO - stop PWM :)
+}
 
-        default:
-            break;
-    }
+void handle_event(AppContext *ctx, AppEvent *evt) {
+  switch (evt->type) {
+    case EVENT_KEY_PRESSED:
+      printf("GOT %c from event. Current state is %i\r\n", evt->key, ctx->currentState);
+      switch (evt->key) {
+        case 'z':
+          ctx->currentState = STATE_F1;
+          printf("STATE_F1 - voltage control. \r\n");
+          printf("Enter voltage by pressing digits, then press Enter (or clear to try again) \r\n");
+          printf("After entering voltage, press Start/Stop to control PWM.\r\n");
+          return;
+        case 'x':
+          ctx->currentState = STATE_F2;
+          printf("Settings state to STATE_F2\r\n");
+          if (ctx->isPwmRunning == true) {
+            stopPWM(ctx);
+          }
+          return;
+      }
+
+      switch (ctx->currentState) {
+        case STATE_F1:
+          switch (evt->key) {
+            case '0': case '1': case '2': case '3': case '4': case '5': case '6': case '7': case '8': case '9': {
+              if (ctx->isPwmRunning) {
+                stopPWM(ctx);
+              }
+
+              // if voltage has been entered already, we will clear it for new voltage
+              if (ctx->isVoltageEntered) {
+                clearVoltage(ctx);
+              }
+              uint8_t digit = evt->key - '0';
+              ctx->voltage = ctx->voltage * 10 + digit;
+              printf("temporary voltage is %d\r\n", ctx->voltage);
+              return;
+            }
+            case 'e':
+              if (ctx->voltage < 80 || ctx->voltage > 400)
+              {
+                printf("Voltage has to be in range 80 - 400. Resetting, try again!\r\n");
+                clearVoltage(ctx);
+                return;
+              }
+              if (ctx->isPwmRunning == true)
+              {
+                printf("PWM already running\r\n");
+                return;
+              }
+              ctx->isVoltageEntered = true;
+              printf("Voltage %d has been successfully entered\r\n", ctx->voltage);
+              return;
+            case 'c':
+              clearVoltage(ctx);
+              return;
+            case 'S':
+              if (ctx->isVoltageEntered == false)
+              {
+                printf("Voltage has not been properly entered\r\n");
+                clearVoltage(ctx);
+                return;
+              }
+              if (ctx->isPwmRunning == true)
+              {
+                printf("PWM already running\r\n");
+                return;
+              }
+
+              // TODO - start PWM
+              printf("Starting PWM (%d)\r\n", ctx->voltage);
+              ctx->isPwmRunning = true;
+              return;
+            case 's':
+              stopPWM(ctx);
+              return;
+            default:
+              printf("Unknown key pressed, ignoring\r\n");
+              return;
+          }
+          break;
+
+        case STATE_F2:
+          break;
+        case STATE_F3:
+          break;
+      }
+      break;
+    case EVENT_TIMER_TICK:
+      // Maybe update screen or timeout handler
+      break;
+    default:
+      break;
+  }
 }
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
