@@ -42,6 +42,7 @@ typedef struct {
     uint16_t inputValue;
     bool isVoltageEntered;
     bool isPwmRunning;
+    char message[64];
 
     // F2 - screen where user sets three calibration points
     uint16_t calibration_points[3]; // For mapping
@@ -71,6 +72,9 @@ static void MX_GPIO_Init(void);
 static void MX_USART2_UART_Init(void);
 /* USER CODE BEGIN PFP */
 void handle_event(AppContext *ctx, AppEvent *evt);
+void renderState(AppContext *ctx);
+void ClearScreen();
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -120,7 +124,6 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  printf("Starting the main loop\r\n");
   AppEvent evt;
   AppContext ctx;
   ctx.currentState = STATE_F1;
@@ -129,10 +132,13 @@ int main(void)
   ctx.voltage = 0;
   ctx.inputValue = 0;
 
+  renderState(&ctx);
+
   while (1)
   {
     if (event_queue_pop(&evt)) {
       handle_event(&ctx, &evt);
+      renderState(&ctx);
     }
     /* USER CODE END WHILE */
 
@@ -261,62 +267,65 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+
+void SetCursorPosition(int row, int col) {
+  printf("\033[%d;%dH", row, col);
+}
+
+void ClearScreen() {
+  printf("\033[2J");
+  printf("\033[H"); // Move cursor to top-left corner
+}
+
 void clearInput(AppContext *ctx) {
-  printf("Clearing input value\r\n");
   ctx->inputValue = 0;
 }
 
 void stopPWM(AppContext *ctx) {
-  printf("Stopping PWM\r\n");
   ctx->isPwmRunning = false;
   // TODO - stop PWM :)
 }
 
 void startPWM(AppContext *ctx) {
-  printf("Starting PWM for %dV\r\n", ctx->voltage);
   ctx->isPwmRunning = true;
   // TODO - start PWM :)
 }
 
 void setSTATE_F2(AppContext *ctx) {
   ctx->currentState = STATE_F2;
-  printf("Settings state to STATE_F2\r\n");
 }
 
 void setSTATE_F1(AppContext *ctx) {
   ctx->currentState = STATE_F1;
-  printf("Settings state to STATE_F1\r\n");
 }
 
 void validateAndSetVoltage(AppContext *ctx) {
   if (ctx->inputValue < 80 || ctx->inputValue > 400)
   {
-    printf("Input voltage has to be in range 80 - 400. Resetting, try again!\r\n");
+    strcpy(ctx->message, "Input voltage has to be in range 80 - 400. Resetting, try again!\r\n");
     clearInput(ctx);
     return;
   }
   ctx->isVoltageEntered = true;
   ctx->voltage = ctx->inputValue;
   ctx->inputValue = 0;
-  printf("Voltage %d has been successfully entered\r\n", ctx->voltage);
+  sprintf(ctx->message, "Voltage %d has been successfully entered\r\n", ctx->voltage);
+
 }
 
 void updateInput(AppContext *ctx, uint8_t key) {
   uint8_t digit = key - '0';
   ctx->inputValue = ctx->inputValue * 10 + digit;
   if (ctx->inputValue > 400) {
-    printf("Input set too high, resetting. Try again\r\n");
+    strcpy(ctx->message, "Input set too high, resetting. Try again\r\n");
     clearInput(ctx);
   }
-
-  printf("Temporary input is %d. Press ENTER to set it.\r\n", ctx->inputValue);
 }
 
 void handle_event(AppContext *ctx, AppEvent *evt) {
+  ctx->message[0] = '\0';
   switch (evt->type) {
     case EVENT_KEY_PRESSED:
-      printf("GOT %c from event. Current state is %i\r\n", evt->key, ctx->currentState);
-
       if (ctx->currentState == STATE_F1) {
         if (ctx->isPwmRunning == true)
         {
@@ -348,11 +357,34 @@ void handle_event(AppContext *ctx, AppEvent *evt) {
   }
 }
 
+void renderState(AppContext *ctx) {
+  ClearScreen();
+  SetCursorPosition(1, 1);
+  if (ctx->currentState == STATE_F1) {
+    printf("Voltage control");
+    SetCursorPosition(2, 1);
+    printf("Current input: %d", ctx->inputValue);
+    SetCursorPosition(3, 1);
+    if (ctx->voltage > 0) {
+      printf("Voltage: %dV", ctx->voltage);
+    } else {
+      printf("Voltage: N/A");
+    }
+    SetCursorPosition(4, 1);
+    if (ctx->isPwmRunning == true) {
+      printf("PWM is running at %dV", ctx->voltage);
+    } else {
+      printf("PWM is OFF");
+    }
+    SetCursorPosition(5, 1);
+    printf(ctx->message);
+  }
+}
+
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
   if (huart->Instance == USART2)
   {
-    //printf("GOT %c\r\n", receivedChar);
     AppEvent evt = { .type = EVENT_KEY_PRESSED, .key = receivedChar };
     event_queue_push(evt);
 
