@@ -39,6 +39,7 @@ typedef struct {
 
 	// F1 - screen where user enters voltage and can start/stop PWM
     uint16_t voltage;
+    uint16_t inputValue;
     bool isVoltageEntered;
     bool isPwmRunning;
 
@@ -126,6 +127,7 @@ int main(void)
   ctx.isVoltageEntered = false;
   ctx.isPwmRunning = false;
   ctx.voltage = 0;
+  ctx.inputValue = 0;
 
   while (1)
   {
@@ -259,10 +261,9 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-void clearVoltage(AppContext *ctx) {
-  printf("Clearing temporary voltage\r\n");
-  ctx->voltage = 0;
-  ctx->isVoltageEntered = false;
+void clearInput(AppContext *ctx) {
+  printf("Clearing input value\r\n");
+  ctx->inputValue = 0;
 }
 
 void stopPWM(AppContext *ctx) {
@@ -271,91 +272,72 @@ void stopPWM(AppContext *ctx) {
   // TODO - stop PWM :)
 }
 
+void startPWM(AppContext *ctx) {
+  printf("Starting PWM for %dV\r\n", ctx->voltage);
+  ctx->isPwmRunning = true;
+  // TODO - start PWM :)
+}
+
+void setSTATE_F2(AppContext *ctx) {
+  ctx->currentState = STATE_F2;
+  printf("Settings state to STATE_F2\r\n");
+}
+
+void setSTATE_F1(AppContext *ctx) {
+  ctx->currentState = STATE_F1;
+  printf("Settings state to STATE_F1\r\n");
+}
+
+void validateAndSetVoltage(AppContext *ctx) {
+  if (ctx->inputValue < 80 || ctx->inputValue > 400)
+  {
+    printf("Input voltage has to be in range 80 - 400. Resetting, try again!\r\n");
+    clearInput(ctx);
+    return;
+  }
+  ctx->isVoltageEntered = true;
+  ctx->voltage = ctx->inputValue;
+  ctx->inputValue = 0;
+  printf("Voltage %d has been successfully entered\r\n", ctx->voltage);
+}
+
+void updateInput(AppContext *ctx, uint8_t key) {
+  uint8_t digit = key - '0';
+  ctx->inputValue = ctx->inputValue * 10 + digit;
+  if (ctx->inputValue > 400) {
+    printf("Input set too high, resetting. Try again\r\n");
+    clearInput(ctx);
+  }
+
+  printf("Temporary input is %d. Press ENTER to set it.\r\n", ctx->inputValue);
+}
+
 void handle_event(AppContext *ctx, AppEvent *evt) {
   switch (evt->type) {
     case EVENT_KEY_PRESSED:
       printf("GOT %c from event. Current state is %i\r\n", evt->key, ctx->currentState);
-      switch (evt->key) {
-        case 'z':
-          ctx->currentState = STATE_F1;
-          printf("STATE_F1 - voltage control. \r\n");
-          printf("Enter voltage by pressing digits, then press Enter (or clear to try again) \r\n");
-          printf("After entering voltage, press Start/Stop to control PWM.\r\n");
-          return;
-        case 'x':
-          ctx->currentState = STATE_F2;
-          printf("Settings state to STATE_F2\r\n");
-          if (ctx->isPwmRunning == true) {
-            stopPWM(ctx);
-          }
-          return;
+
+      if (ctx->currentState == STATE_F1) {
+        if (ctx->isPwmRunning == true)
+        {
+          if (evt->key == 's') stopPWM(ctx);
+          return; // when PWM is running, we can only press the "STOP" button
+        }
+
+        if (ctx->isVoltageEntered == true) // valid voltage has been entered
+        {
+          if (evt->key == 'S') startPWM(ctx);
+        }
+
+        if (evt->key >= '0' && evt->key <= '9') updateInput(ctx, evt->key);
+        if (evt->key == 'c') clearInput(ctx);
+        if (evt->key == 'e') validateAndSetVoltage(ctx);
+        if (evt->key == 'x') setSTATE_F2(ctx);
       }
 
-      switch (ctx->currentState) {
-        case STATE_F1:
-          switch (evt->key) {
-            case '0': case '1': case '2': case '3': case '4': case '5': case '6': case '7': case '8': case '9': {
-              if (ctx->isPwmRunning) {
-                stopPWM(ctx);
-              }
-
-              // if voltage has been entered already, we will clear it for new voltage
-              if (ctx->isVoltageEntered) {
-                clearVoltage(ctx);
-              }
-              uint8_t digit = evt->key - '0';
-              ctx->voltage = ctx->voltage * 10 + digit;
-              printf("temporary voltage is %d\r\n", ctx->voltage);
-              return;
-            }
-            case 'e':
-              if (ctx->voltage < 80 || ctx->voltage > 400)
-              {
-                printf("Voltage has to be in range 80 - 400. Resetting, try again!\r\n");
-                clearVoltage(ctx);
-                return;
-              }
-              if (ctx->isPwmRunning == true)
-              {
-                printf("PWM already running\r\n");
-                return;
-              }
-              ctx->isVoltageEntered = true;
-              printf("Voltage %d has been successfully entered\r\n", ctx->voltage);
-              return;
-            case 'c':
-              clearVoltage(ctx);
-              return;
-            case 'S':
-              if (ctx->isVoltageEntered == false)
-              {
-                printf("Voltage has not been properly entered\r\n");
-                clearVoltage(ctx);
-                return;
-              }
-              if (ctx->isPwmRunning == true)
-              {
-                printf("PWM already running\r\n");
-                return;
-              }
-
-              // TODO - start PWM
-              printf("Starting PWM (%d)\r\n", ctx->voltage);
-              ctx->isPwmRunning = true;
-              return;
-            case 's':
-              stopPWM(ctx);
-              return;
-            default:
-              printf("Unknown key pressed, ignoring\r\n");
-              return;
-          }
-          break;
-
-        case STATE_F2:
-          break;
-        case STATE_F3:
-          break;
+      if (ctx->currentState == STATE_F2) {
+        if (evt->key == 'z') setSTATE_F1(ctx);
+        return;
       }
       break;
     case EVENT_TIMER_TICK:
