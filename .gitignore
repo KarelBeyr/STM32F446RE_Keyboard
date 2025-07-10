@@ -1,0 +1,14 @@
+# STM32CubeIDE
+/Debug/
+/Release/
+/build/
+/*.launch
+/*.bin
+/*.elf
+/*.hex
+/*.map
+/*.list
+/*.cyc*
+*.o
+*.d
+*.log
