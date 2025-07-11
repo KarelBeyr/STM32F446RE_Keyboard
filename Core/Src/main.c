@@ -34,19 +34,55 @@ typedef enum {
     STATE_F3,
 } AppState;
 
+typedef enum { // A bit atypical, but I want to be able to read data from PC connected through UART for better UX
+  KEY_0 = '0',
+  KEY_1 = '1',
+  KEY_2 = '2',
+  KEY_3 = '3',
+  KEY_4 = '4',
+  KEY_5 = '5',
+  KEY_6 = '6',
+  KEY_7 = '7',
+  KEY_8 = '8',
+  KEY_9 = '9',
+  KEY_Enter = 'e',
+  KEY_Clear = 'c',
+  KEY_BkSp = 'b',
+  KEY_Start = 'S',
+  KEY_Stop = 's',
+  KEY_ESC = '`',
+  KEY_F1 = '!',
+  KEY_F2 = '@',
+  KEY_F3 = '#',
+  KEY_F4 = '$',
+  KEY_F5 = '%',
+  KEY_Dot = '.',
+  KEY_Lock = 'l',
+  KEY_OFF = 'f',
+  KEY_ON = 'n'
+} KeyboardButton;
+
 typedef struct {
 	AppState currentState;
 
 	// F1 - screen where user enters voltage and can start/stop PWM
-    uint16_t voltage;
-    uint16_t inputValue;
-    bool isVoltageEntered;
-    bool isPwmRunning;
-    char message[64];
+  uint16_t voltage; // register holding voltage that has been validated and is ready to be sent to PWM
+  uint16_t inputValue; // register holding current value of "input field"
+  bool isVoltageEntered; // flag if we are ready to start PWM. Maybe redundant, we can check against voltage register. But its more robust this way
+  bool isPwmRunning;
+  char message[64]; // ad hoc message to display
 
-    // F2 - screen where user sets three calibration points
+    // F2 - screen where user sets three calibration points - TODO later
     uint16_t calibration_points[3]; // For mapping
 } AppContext;
+
+const char keymap[5][5] = {
+    {KEY_ESC,  KEY_3,   KEY_2,     KEY_1,     KEY_BkSp},
+    {KEY_6,    KEY_5,   KEY_4,     KEY_Clear, KEY_9},
+    {KEY_8,    KEY_7,   KEY_Enter, KEY_Dot,   KEY_0},
+    {KEY_Lock, KEY_F5,  KEY_F4,    KEY_F3,    KEY_F2},
+    {KEY_F1,   KEY_OFF, KEY_ON,    KEY_Stop,  KEY_Start}
+};
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -63,6 +99,10 @@ typedef struct {
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
+volatile int currentRow = -1; // -1 means no row is active
+volatile int lastRow = -1;
+volatile int lastCol = -1;
+volatile uint32_t lastTriggerTime = 0;
 uint8_t receivedChar;
 /* USER CODE END PV */
 
@@ -74,17 +114,15 @@ static void MX_USART2_UART_Init(void);
 void handle_event(AppContext *ctx, AppEvent *evt);
 void renderState(AppContext *ctx);
 void ClearScreen();
+void setRowActive(int row);
+void setAllRowsInactive();
+void readFlexiKeyboard();
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-int __io_putchar(int ch) {
-  if (HAL_UART_Transmit(&huart2, (uint8_t *)&ch, 1, HAL_MAX_DELAY) != HAL_OK) {
-    return -1;
-  }
-  return ch;
-}
+
 /* USER CODE END 0 */
 
 /**
@@ -118,6 +156,7 @@ int main(void)
   MX_GPIO_Init();
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
+  setAllRowsInactive();
   HAL_UART_Receive_IT(&huart2, &receivedChar, 1);
   setbuf(stdout, NULL);
   /* USER CODE END 2 */
@@ -140,6 +179,9 @@ int main(void)
       handle_event(&ctx, &evt);
       renderState(&ctx);
     }
+
+    readFlexiKeyboard(); // approx 25ms blocking code to scan the keyboard
+
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -246,7 +288,13 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, LD2_Pin|GPIO_PIN_6|GPIO_PIN_7|GPIO_PIN_9, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_7, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : B1_Pin */
   GPIO_InitStruct.Pin = B1_Pin;
@@ -254,12 +302,51 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : LD2_Pin */
-  GPIO_InitStruct.Pin = LD2_Pin;
+  /*Configure GPIO pins : LD2_Pin PA6 PA7 PA9 */
+  GPIO_InitStruct.Pin = LD2_Pin|GPIO_PIN_6|GPIO_PIN_7|GPIO_PIN_9;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(LD2_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : PB10 PB3 PB4 PB5 */
+  GPIO_InitStruct.Pin = GPIO_PIN_10|GPIO_PIN_3|GPIO_PIN_4|GPIO_PIN_5;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : PC7 */
+  GPIO_InitStruct.Pin = GPIO_PIN_7;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : PA8 */
+  GPIO_InitStruct.Pin = GPIO_PIN_8;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : PB6 */
+  GPIO_InitStruct.Pin = GPIO_PIN_6;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /* EXTI interrupt init*/
+  HAL_NVIC_SetPriority(EXTI3_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI3_IRQn);
+
+  HAL_NVIC_SetPriority(EXTI4_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI4_IRQn);
+
+  HAL_NVIC_SetPriority(EXTI9_5_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
+
+  HAL_NVIC_SetPriority(EXTI15_10_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
@@ -267,6 +354,74 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+void readFlexiKeyboard()
+{
+  for (int row = 0; row < 5; row++)
+  {
+      setRowActive(row);       // Pull only one row LOW
+      currentRow = row;        // Track active row
+      HAL_Delay(5);            // Wait to detect keypress
+
+      setAllRowsInactive();    // Set all rows HIGH again
+      currentRow = -1;
+  }
+}
+
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+    if (currentRow == -1) return; // No row active, ignore
+
+    int col = -1;
+
+    switch (GPIO_Pin)
+    {
+        case GPIO_PIN_3:  col = 0; break; // PB3
+        case GPIO_PIN_5:  col = 1; break; // PB5
+        case GPIO_PIN_4:  col = 2; break; // PB4
+        case GPIO_PIN_10: col = 3; break; // PB10
+        case GPIO_PIN_8:  col = 4; break; // PA8
+    }
+
+    if (col != -1)
+    {
+      uint32_t now = HAL_GetTick();
+      if (lastRow == currentRow && lastCol == col && (now - lastTriggerTime < 300)) {
+          return; // HACKY debounce/repeat suppression
+      }
+      lastRow = currentRow;
+      lastCol = col;
+      lastTriggerTime = now;
+      // Key at (currentRow, col) was pressed!
+      // printf("Pressed row %d and col %d\r\n", currentRow, col);
+
+      receivedChar = keymap[currentRow][col];
+      // printf("Which is hopefully %c\r\n", receivedChar);
+      AppEvent evt = { .type = EVENT_KEY_PRESSED, .key = receivedChar };
+      event_queue_push(evt);
+    }
+}
+
+void setAllRowsInactive()
+{
+    // Set all rows HIGH (not active)
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6 | GPIO_PIN_7 | GPIO_PIN_9, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_7, GPIO_PIN_SET);
+}
+
+void setRowActive(int row)
+{
+    setAllRowsInactive();
+
+    switch (row)
+    {
+        case 0: HAL_GPIO_WritePin(GPIOA, GPIO_PIN_9, GPIO_PIN_RESET); break;
+        case 1: HAL_GPIO_WritePin(GPIOC, GPIO_PIN_7, GPIO_PIN_RESET); break;
+        case 2: HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_RESET); break;
+        case 3: HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7, GPIO_PIN_RESET); break;
+        case 4: HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_RESET); break;
+    }
+}
 
 void SetCursorPosition(int row, int col) {
   printf("\033[%d;%dH", row, col);
@@ -279,6 +434,15 @@ void ClearScreen() {
 
 void clearInput(AppContext *ctx) {
   ctx->inputValue = 0;
+}
+
+void clearVoltage(AppContext *ctx) {
+  ctx->voltage = 0;
+  ctx->isVoltageEntered = false;
+}
+
+void backspace(AppContext *ctx) {
+  ctx->inputValue = ctx->inputValue / 10;
 }
 
 void stopPWM(AppContext *ctx) {
@@ -313,7 +477,7 @@ void validateAndSetVoltage(AppContext *ctx) {
 
 }
 
-void updateInput(AppContext *ctx, uint8_t key) {
+void updateInput(AppContext *ctx, KeyboardButton key) {
   uint8_t digit = key - '0';
   ctx->inputValue = ctx->inputValue * 10 + digit;
   if (ctx->inputValue > 400) {
@@ -329,23 +493,25 @@ void handle_event(AppContext *ctx, AppEvent *evt) {
       if (ctx->currentState == STATE_F1) {
         if (ctx->isPwmRunning == true)
         {
-          if (evt->key == 's') stopPWM(ctx);
+          if (evt->key == KEY_Stop) stopPWM(ctx);
           return; // when PWM is running, we can only press the "STOP" button
         }
 
         if (ctx->isVoltageEntered == true) // valid voltage has been entered
         {
-          if (evt->key == 'S') startPWM(ctx);
+          if (evt->key == KEY_Start) startPWM(ctx);
         }
 
-        if (evt->key >= '0' && evt->key <= '9') updateInput(ctx, evt->key);
-        if (evt->key == 'c') clearInput(ctx);
-        if (evt->key == 'e') validateAndSetVoltage(ctx);
-        if (evt->key == 'x') setSTATE_F2(ctx);
+        if (evt->key >= KEY_0 && evt->key <= KEY_9) updateInput(ctx, evt->key);
+        if (evt->key == KEY_Clear) clearVoltage(ctx);
+        if (evt->key == KEY_Enter) validateAndSetVoltage(ctx);
+        if (evt->key == KEY_BkSp) backspace(ctx);
+        if (evt->key == KEY_F2) setSTATE_F2(ctx);
+        if (evt->key == KEY_ESC) clearInput(ctx);
       }
 
       if (ctx->currentState == STATE_F2) {
-        if (evt->key == 'z') setSTATE_F1(ctx);
+        if (evt->key == KEY_F1) setSTATE_F1(ctx);
         return;
       }
       break;
@@ -391,6 +557,13 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
     // Start receiving the next character again
     HAL_UART_Receive_IT(&huart2, &receivedChar, 1);
   }
+}
+
+int __io_putchar(int ch) {
+  if (HAL_UART_Transmit(&huart2, (uint8_t *)&ch, 1, HAL_MAX_DELAY) != HAL_OK) {
+    return -1;
+  }
+  return ch;
 }
 /* USER CODE END 4 */
 
